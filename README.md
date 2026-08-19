@@ -121,22 +121,19 @@ level.
 multi-view-vehicle-data-engine/
 ├── README.md                 ← this file
 ├── VehicleSyncData.xlsx      ← sample of the intended output
-├── db/                       ← PostgreSQL storage layer (prototype)
-│   ├── schema.sql            ← tables: cameras, vehicles, tracks, detections
-│   ├── views.sql             ← cross-view query views + functions
-│   └── config.py             ← DB connection helper
-├── etl/                      ← load pipeline output into the DB
-│   ├── parse.py              ← parse VehicleSyncData.xlsx → records
-│   └── load_xlsx.py          ← insert records into PostgreSQL
-├── query/
-│   └── query.py              ← CLI for the cross-view lookup
-├── docker-compose.yml        ← local PostgreSQL for development
-└── requirements.txt
+└── archive/
+    └── prototype-from-sample/  ← early DB/ETL prototype built from the xlsx
+        ├── db/                 ← schema.sql, views.sql, config.py
+        ├── etl/                ← parse.py, load_xlsx.py
+        ├── query/              ← query.py (cross-view lookup CLI)
+        └── docker-compose.yml, requirements.txt, .env.example
 ```
 
-> The `db/`, `etl/`, and `query/` code is an early **prototype of Half 2** built
-> from the sample spreadsheet. It will be revisited and walked through once the
-> perception pipeline (Half 1) is producing real output.
+> The perception-pipeline code (Half 1) will be added step by step as we build
+> it. The `archive/prototype-from-sample/` folder is an early **prototype of
+> Half 2** built from the sample spreadsheet — kept as a reference only. We will
+> rebuild the ETL/database **for real, incrementally**, starting after Step 3
+> once the pipeline emits genuine per-camera tracks.
 
 ---
 
