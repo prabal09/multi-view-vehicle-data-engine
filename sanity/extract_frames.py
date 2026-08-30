@@ -13,21 +13,38 @@ import cv2
 CLIP_ROOT = r"C:/Users/praba/PycharmProjects/AvaCar/OpenCV Practice/roadside_video_1600x900"
 
 # Where to drop the extracted stills.
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frames")
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frames2")
 
-# (camera, clip_basename, frame_index). These are the same vehicle
-# ("Cadillac Escalade" row of VehicleSyncData.xlsx) seen from all 5 views,
-# using mid-points of the frame ranges in test_1.py.
-FRAMES = [
-    ("c0", "c0_5", 592),
-    ("c1", "c1_1", 7643),
-    ("c2", "c2_0", 5502),
-    ("c3", "c3_3", 5790),
-    ("c4", "c4_2", 8925),
-]
+# Ground truth from VehicleSyncData.xlsx: pick a vehicle, take its per-camera
+# (clip, frame-start). Every frame here is GUARANTEED to contain that vehicle,
+# so detections can be checked against a known answer. Files are named
+# {vehicle}__{clip}_f{frame}.jpg.
+VEHICLES = {
+    # BMW 135i -- a small sedan (harder than the SUV).
+    "bmw_135i": [
+        ("c0", "c0_4", 5303),
+        ("c1", "c1_1", 2568),
+        ("c2", "c2_0", 422),
+        ("c3", "c3_3", 2400),
+        ("c4", "c4_2", 3822),
+    ],
+    # Hummer H2 -- a large SUV, different clips/times.
+    "hummer_h2": [
+        ("c0", "c0_5", 3802),
+        ("c1", "c1_2", 1058),
+        ("c2", "c2_0", 8714),
+        ("c3", "c3_4", 902),
+        ("c4", "c4_3", 2316),
+    ],
+}
+
+# Flatten to (vehicle, camera, clip, frame) for extraction.
+FRAMES = [(veh, cam, clip, idx)
+          for veh, rows in VEHICLES.items()
+          for (cam, clip, idx) in rows]
 
 
-def extract(camera: str, clip: str, frame_idx: int) -> None:
+def extract(vehicle: str, camera: str, clip: str, frame_idx: int) -> None:
     path = os.path.join(CLIP_ROOT, camera, clip + ".mp4")
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
@@ -44,7 +61,7 @@ def extract(camera: str, clip: str, frame_idx: int) -> None:
     if not ok:
         print(f"  ERROR: failed to read frame {frame_idx} of {clip}")
         return
-    out = os.path.join(OUT_DIR, f"{clip}_f{frame_idx}.jpg")
+    out = os.path.join(OUT_DIR, f"{vehicle}__{clip}_f{frame_idx}.jpg")
     cv2.imwrite(out, frame)
     print(f"  wrote {out}  ({frame.shape[1]}x{frame.shape[0]})")
 
@@ -52,8 +69,8 @@ def extract(camera: str, clip: str, frame_idx: int) -> None:
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     print(f"Extracting {len(FRAMES)} frames -> {OUT_DIR}")
-    for camera, clip, idx in FRAMES:
-        extract(camera, clip, idx)
+    for vehicle, camera, clip, idx in FRAMES:
+        extract(vehicle, camera, clip, idx)
 
 
 if __name__ == "__main__":
