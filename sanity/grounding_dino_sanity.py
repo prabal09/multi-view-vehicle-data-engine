@@ -32,15 +32,16 @@ from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
 # --- defaults (override via CLI flags) ---------------------------------------
-# "-tiny" downloads faster; switch to "-base" for higher accuracy.
-DEFAULT_MODEL = "IDEA-Research/grounding-dino-tiny"
+# "-base" is markedly more accurate than "-tiny"; use it for real evaluation.
+DEFAULT_MODEL = "IDEA-Research/grounding-dino-base"
 
 # Grounding DINO expects LOWERCASE phrases, separated by ". ", ending with ".".
-# Each phrase is an independent open-vocabulary query.
-DEFAULT_PROMPT = "a car. a truck. an suv. a van. a pickup truck. a bus. a person."
+# Each phrase is an independent open-vocabulary query -- bare vehicle nouns only
+# (no "person", no instructions; overlapping labels are unified downstream).
+DEFAULT_PROMPT = "car. suv. truck. pickup truck. van. bus."
 
-DEFAULT_BOX_THRESHOLD = 0.35    # min confidence to keep a box
-DEFAULT_TEXT_THRESHOLD = 0.25   # min phrase-match strength for the label
+DEFAULT_BOX_THRESHOLD = 0.25    # min confidence to keep a box (lowered)
+DEFAULT_TEXT_THRESHOLD = 0.20   # min phrase-match strength for the label
 
 
 def load_model(model_id: str, device: str):
