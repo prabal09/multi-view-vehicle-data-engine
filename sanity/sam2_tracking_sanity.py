@@ -43,6 +43,7 @@ import torch
 from PIL import Image
 
 # --- detection (Grounding DINO) defaults -------------------------------------
+# GDINO_MODEL = "IDEA-Research/grounding-dino-tiny"   # loads the tiny version
 GDINO_MODEL = "IDEA-Research/grounding-dino-base"
 GDINO_PROMPT = "car. suv. truck. pickup truck. van. bus."
 GDINO_BOX_THRESHOLD = 0.25
