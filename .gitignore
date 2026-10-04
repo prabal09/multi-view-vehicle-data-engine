@@ -1,0 +1,15 @@
+# SSH / private keys -- never commit these
+*.pem
+*.key
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Local sanity-test outputs (large, regenerable)
+sanity/track/
+sanity/track_out/
+sanity/frames/
+sanity/frames2/
+sanity/typeset/
