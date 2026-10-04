@@ -26,7 +26,10 @@ COLAB
   !python gdino_classify_experiment.py --dir typeset --template "a {t}"
   !python gdino_classify_experiment.py --dir typeset \
       --candidates "sedan,suv,pickup truck,coupe,hatchback,minivan"
-------------------------------------------------------------------------------
+    OR
+    !python -u gdino_classify_experiment.py --dir typeset
+
+      ------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
