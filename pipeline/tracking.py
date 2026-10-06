@@ -90,6 +90,45 @@ def associate(det_boxes, track_boxes, iou_thresh: float = 0.3):
     return matches, unmatched_dets, unmatched_tracks
 
 
+def plan_seeds(detections_by_frame, iou_thresh: float = 0.3,
+               max_gap_frames: int = 30) -> list[tuple[int, tuple]]:
+    """Decide ONE SAM2 seed per provisional vehicle from sparse detections.
+
+    Walk sampled frames in order, keeping a set of provisional tracks (each with
+    the box where it was last seen). Each sampled frame:
+      - match detections to provisional tracks by IoU (already tracked -> update);
+      - unmatched detections start a NEW provisional track -> emit a seed;
+      - retire tracks not seen within `max_gap_frames` so a stale box can't
+        wrongly absorb a new vehicle (guards against over-merge).
+
+    Conservative on purpose: prefer over-splitting (post-merge fixes duplicates)
+    over over-merging (which would drop a vehicle entirely).
+
+    detections_by_frame: {frame_idx: [Detection, ...]}  (from detect_clip)
+    returns: [(seed_frame, seed_box), ...] sorted by seed_frame.
+    """
+    active: list[dict] = []     # {seed_frame, seed_box, last_frame, last_box}
+    seeds: list[tuple[int, tuple]] = []
+
+    for f in sorted(detections_by_frame):
+        det_boxes = [d.box for d in detections_by_frame[f]]
+        active_boxes = [t["last_box"] for t in active]
+        matches, new_dets, _ = associate(det_boxes, active_boxes, iou_thresh)
+
+        for di, ti in matches:                      # already-tracked -> refresh
+            active[ti]["last_frame"] = f
+            active[ti]["last_box"] = det_boxes[di]
+
+        for di in new_dets:                          # newcomer -> new seed
+            active.append({"seed_frame": f, "seed_box": det_boxes[di],
+                           "last_frame": f, "last_box": det_boxes[di]})
+            seeds.append((f, det_boxes[di]))
+
+        active = [t for t in active if f - t["last_frame"] <= max_gap_frames]
+
+    return sorted(seeds, key=lambda s: s[0])
+
+
 # --- local demo (no GPU): python -m pipeline.tracking ------------------------
 if __name__ == "__main__":
     # 3 fresh detections this frame; 2 tracks SAM2 is already carrying.
@@ -109,3 +148,24 @@ if __name__ == "__main__":
     print("matches (det->track):", matches)
     print("new detections -> seed new tracks:", new_dets)
     print("tracks with no detection this frame:", lost_tracks)
+
+    print("\n--- plan_seeds demo ---")
+    from pipeline.detection import Detection
+
+    def D(box):
+        return Detection(box=box, score=0.5)
+
+    # Vehicle A slides right across frames 0,10,20 (overlapping -> one seed).
+    # Vehicle B appears at frame 20 elsewhere (new seed).
+    # Vehicle C appears at frame 60 after A/B are gone (new seed).
+    dets_by_frame = {
+        0:  [D((100, 100, 200, 200))],
+        10: [D((120, 100, 220, 200))],
+        20: [D((140, 100, 240, 200)), D((500, 300, 600, 400))],
+        60: [D((800, 100, 900, 200))],
+    }
+    seeds = plan_seeds(dets_by_frame, iou_thresh=0.3, max_gap_frames=30)
+    print("seeds (frame, box):")
+    for sf, sb in seeds:
+        print(f"   frame {sf}: {tuple(round(v) for v in sb)}")
+    print(f"total provisional vehicles: {len(seeds)}  (expected 3)")
