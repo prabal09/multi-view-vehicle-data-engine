@@ -129,6 +129,75 @@ def plan_seeds(detections_by_frame, iou_thresh: float = 0.3,
     return sorted(seeds, key=lambda s: s[0])
 
 
+def _paired_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Element-wise IoU of two equal-length box arrays (K,4) & (K,4) -> (K,).
+
+    Note: this is the *paired* (i-th vs i-th) case -- not the all-pairs matrix.
+    We use it to compare two tracks frame-by-frame on the frames they share.
+    """
+    x0 = np.maximum(a[:, 0], b[:, 0]); y0 = np.maximum(a[:, 1], b[:, 1])
+    x1 = np.minimum(a[:, 2], b[:, 2]); y1 = np.minimum(a[:, 3], b[:, 3])
+    inter = np.clip(x1 - x0, 0, None) * np.clip(y1 - y0, 0, None)
+    area_a = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1])
+    area_b = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    return inter / np.maximum(area_a + area_b - inter, 1e-9)
+
+
+class _UnionFind:
+    def __init__(self, n: int):
+        self.parent = list(range(n))
+
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]   # path compression
+            x = self.parent[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        self.parent[self.find(a)] = self.find(b)
+
+
+def merge_tracks(raw_tracks: dict[int, dict[int, tuple]],
+                 iou_thresh: float = 0.5,
+                 min_shared_frames: int = 3) -> dict[int, dict[int, tuple]]:
+    """Collapse duplicate SAM2 tracks of the same vehicle.
+
+    Two tracks are the same vehicle if, on the frames they BOTH cover, their
+    boxes have high mean IoU (averaging over shared frames rejects a brief
+    coincidental overlap of two genuinely different vehicles).
+
+    raw_tracks: {obj_id: {frame: box}}  (dense, from Sam2ClipEngine.propagate)
+    returns:    {merged_track_id: {frame: box}}  with duplicates unioned.
+    """
+    ids = list(raw_tracks)
+    uf = _UnionFind(len(ids))
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            shared = sorted(set(raw_tracks[ids[i]]) & set(raw_tracks[ids[j]]))
+            if len(shared) < min_shared_frames:
+                continue
+            a = np.array([raw_tracks[ids[i]][f] for f in shared], dtype=float)
+            b = np.array([raw_tracks[ids[j]][f] for f in shared], dtype=float)
+            if _paired_iou(a, b).mean() >= iou_thresh:
+                uf.union(i, j)
+
+    # group track indices by their union-find root
+    components: dict[int, list[int]] = {}
+    for k in range(len(ids)):
+        components.setdefault(uf.find(k), []).append(k)
+
+    merged: dict[int, dict[int, tuple]] = {}
+    for new_id, root in enumerate(sorted(components)):
+        combined: dict[int, tuple] = {}
+        # lowest original obj_id first; its box wins on any shared frame
+        for k in sorted(components[root]):
+            for f, box in raw_tracks[ids[k]].items():
+                combined.setdefault(f, box)
+        merged[new_id] = combined
+    return merged
+
+
 # --- local demo (no GPU): python -m pipeline.tracking ------------------------
 if __name__ == "__main__":
     # 3 fresh detections this frame; 2 tracks SAM2 is already carrying.
@@ -169,3 +238,16 @@ if __name__ == "__main__":
     for sf, sb in seeds:
         print(f"   frame {sf}: {tuple(round(v) for v in sb)}")
     print(f"total provisional vehicles: {len(seeds)}  (expected 3)")
+
+    print("\n--- merge_tracks demo ---")
+    def box_x(f):   # vehicle X sliding right
+        return (100 + 10 * f, 100, 200 + 10 * f, 200)
+    raw = {
+        0: {f: box_x(f) for f in range(0, 6)},          # vehicle X, seed @0
+        1: {f: box_x(f) for f in range(3, 9)},          # vehicle X again (over-split), seed @3
+        2: {f: (500, 300, 600, 400) for f in range(0, 6)},  # vehicle Y, separate
+    }
+    merged = merge_tracks(raw, iou_thresh=0.5, min_shared_frames=3)
+    print(f"raw tracks: {len(raw)}  ->  merged tracks: {len(merged)}  (expected 2)")
+    for tid, boxes in merged.items():
+        print(f"   track {tid}: frames {min(boxes)}..{max(boxes)} ({len(boxes)} frames)")
