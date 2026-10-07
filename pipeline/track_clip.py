@@ -51,18 +51,23 @@ def track_clip(detections_by_frame, engine, *, camera: str, clip: str,
 
 
 def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
-             step: int = 10, detector=None, **track_kwargs) -> list[Track]:
-    """Full per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2)."""
+             step: int = 10, end: Optional[int] = None,
+             detector=None, **track_kwargs) -> list[Track]:
+    """Full per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2).
+
+    `end` caps processing to frames [0, end) -- useful for a quick validation on
+    a sub-range before committing to the whole clip.
+    """
     from .detect_clip import GroundingDinoDetector, detect_clip
     from .sampling import extract_all_frames
     from .sam2_engine import Sam2ClipEngine
 
     # 1. detections on sampled frames
     detector = detector or GroundingDinoDetector()
-    detections_by_frame = detect_clip(clip_path, detector, step=step)
+    detections_by_frame = detect_clip(clip_path, detector, step=step, end=end)
 
     # 2. extract all frames for SAM2 (frame_idx aligns with global index)
-    extract_all_frames(clip_path, frames_dir)
+    extract_all_frames(clip_path, frames_dir, end=end)
 
     # 3. SAM2 engine + track
     engine = Sam2ClipEngine(frames_dir)
