@@ -11,13 +11,18 @@ be validated on the EC2 box; `mask_to_box` below is pure and locally testable.
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from typing import Optional
 
 import numpy as np
 
-# Defaults match the sanity test (and the weights baked into the AMI).
-SAM_CHECKPOINT = "sam2.1_hiera_large.pt"
+# Checkpoint location: $SAM2_CHECKPOINT if set, else the ~/checkpoints path we
+# baked into the AMI, else fall back to the bare filename (Colab/sanity cwd).
+SAM_CHECKPOINT = os.environ.get(
+    "SAM2_CHECKPOINT",
+    os.path.expanduser("~/checkpoints/sam2.1_hiera_large.pt"),
+)
 SAM_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
 
