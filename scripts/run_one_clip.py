@@ -29,13 +29,18 @@ def main():
     ap.add_argument("--sam-model", default="large",
                     choices=["tiny", "small", "base", "large"],
                     help="SAM2 size; smaller is lighter/faster")
+    ap.add_argument("--window", type=int, default=120,
+                    help="SAM2 window length in frames (bounds memory)")
+    ap.add_argument("--overlap", type=int, default=20,
+                    help="window overlap in frames (lets boundary tracks stitch)")
     ap.add_argument("--offload", action="store_true",
-                    help="offload SAM2 state to CPU RAM (slow; only for very long clips)")
+                    help="offload SAM2 state to CPU RAM (slow; rarely needed with windowing)")
     ap.add_argument("--out", default="tracks.json")
     args = ap.parse_args()
 
     tracks = run_clip(args.clip, camera=args.camera, clip=args.clip_name,
                       frames_dir=args.frames_dir, step=args.step, end=args.end,
+                      window=args.window, overlap=args.overlap,
                       sam_model=args.sam_model, offload=args.offload)
 
     print(f"\n=== {len(tracks)} tracks ===")

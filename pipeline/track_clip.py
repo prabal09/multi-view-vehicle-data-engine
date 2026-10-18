@@ -1,80 +1,109 @@
-"""Step 3, piece 3c: the per-camera tracking driver.
+"""Step 3, piece 3c: the windowed per-camera tracking driver.
 
-Ties the whole chain together for ONE clip:
+SAM2 state grows with (frames x objects), so tracking a whole clip in one state
+OOMs a 16 GB GPU. Fix: process the clip in OVERLAPPING windows, each with a fresh
+SAM2 state (memory bounded by window length), then run `merge_tracks` once over
+all windows. Because consecutive windows OVERLAP, a vehicle crossing a boundary
+is tracked in both windows and shares frames in the overlap -- so `merge_tracks`
+stitches the two halves into one track automatically. One mechanism handles both
+within-window de-duplication and cross-window stitching.
 
-  detect_clip -> plan_seeds -> engine.seed(each) -> engine.propagate -> merge_tracks -> Track[]
-
-`track_clip` takes the SAM2 engine as an argument (dependency injection), so the
-orchestration is fully testable locally with a stub engine; only the real
-`Sam2ClipEngine` needs the GPU. `run_clip` is the EC2 entry point that wires up
-the real GDINO + SAM2.
+`track_clip` takes the engine and a frame-extractor as arguments (dependency
+injection), so the windowing/stitching logic is fully testable locally with
+stubs; only `run_clip` touches the GPU and disk.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+import os
+import shutil
+from typing import Callable, Optional
 
 from .tracking import Track, merge_tracks, plan_seeds
 
 
-def track_clip(detections_by_frame, engine, *, camera: str, clip: str,
+def make_windows(total: int, window: int, overlap: int) -> list[tuple[int, int]]:
+    """Split [0, total) into overlapping [start, end) windows."""
+    stride = max(1, window - overlap)
+    windows = []
+    ws = 0
+    while ws < total:
+        windows.append((ws, min(ws + window, total)))
+        if ws + window >= total:
+            break
+        ws += stride
+    return windows
+
+
+def track_clip(detections_by_frame, engine, extract_window: Callable[[int, int], str],
+               *, camera: str, clip: str, total: int,
+               window: int = 120, overlap: int = 20,
                link_iou: float = 0.3, max_gap_frames: int = 30,
                merge_iou: float = 0.5, min_shared_frames: int = 3) -> list[Track]:
-    """Turn sparse per-frame detections into merged per-camera tracks.
+    """Windowed tracking over one clip.
 
-    detections_by_frame: {frame_idx: [Detection]}  (from detect_clip)
-    engine:              object with .seed(frame, box)->id and .propagate()->{id:{frame:box}}
+    detections_by_frame: {global_frame: [Detection]}  (from detect_clip)
+    engine:        has track_window(frames_dir, seeds)->{obj_id:{local_frame:box}}
+    extract_window: (ws, we) -> frames_dir with that window's frames (0-based names)
     """
-    # 1. decide one seed per provisional vehicle
-    seeds = plan_seeds(detections_by_frame, iou_thresh=link_iou,
-                       max_gap_frames=max_gap_frames)
+    all_raw: dict[int, dict[int, tuple]] = {}
+    gid = 0
 
-    # 2. seed SAM2 (or stub) with each
-    for seed_frame, seed_box in seeds:
-        engine.seed(seed_frame, seed_box)
-
-    # 3. one dense forward pass
-    raw = engine.propagate()                      # {obj_id: {frame: box}}
-
-    # 4. collapse duplicate tracks from any over-splits
-    merged = merge_tracks(raw, iou_thresh=merge_iou,
-                          min_shared_frames=min_shared_frames)
-
-    # 5. wrap into Track objects carrying identity metadata
-    tracks = []
-    for tid, boxes in sorted(merged.items()):
-        if not boxes:
+    for ws, we in make_windows(total, window, overlap):
+        det_win = {f: d for f, d in detections_by_frame.items() if ws <= f < we}
+        if not det_win:
             continue
-        tracks.append(Track(track_id=tid, camera=camera, clip=clip,
-                            seed_frame=min(boxes), boxes=boxes))
-    return tracks
+
+        # seeds are global frames; SAM2 works in window-local frames
+        seeds_global = plan_seeds(det_win, iou_thresh=link_iou,
+                                  max_gap_frames=max_gap_frames)
+        seeds_local = [(sf - ws, box) for sf, box in seeds_global]
+
+        frames_dir = extract_window(ws, we)
+        raw = engine.track_window(frames_dir, seeds_local)   # {obj:{local:box}}
+
+        for fb in raw.values():                               # remap local -> global
+            all_raw[gid] = {ws + lf: box for lf, box in fb.items()}
+            gid += 1
+
+    # one global pass: de-dup within windows + stitch across overlaps
+    merged = merge_tracks(all_raw, iou_thresh=merge_iou,
+                          min_shared_frames=min_shared_frames)
+    return [Track(track_id=tid, camera=camera, clip=clip,
+                 seed_frame=min(boxes), boxes=boxes)
+            for tid, boxes in sorted(merged.items()) if boxes]
 
 
 def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
              step: int = 10, end: Optional[int] = None,
+             window: int = 120, overlap: int = 20,
              sam_model: str = "large", offload: bool = False,
              detector=None, **track_kwargs) -> list[Track]:
-    """Full per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2).
+    """Full windowed per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2).
 
-    `end` caps processing to frames [0, end) for a quick sub-range validation.
-    `sam_model` picks the SAM2 size ("tiny"/"small"/"base"/"large"); smaller is
-    far lighter and faster. `offload` moves SAM2 state to CPU RAM (only for very
-    long clips -- it is slow and can OOM system RAM, so default off).
+    `end` caps to frames [0, end). `window`/`overlap` bound SAM2 memory per window.
+    `sam_model` picks the SAM2 size; `offload` moves state to CPU RAM (slow).
     """
     from .detect_clip import GroundingDinoDetector, detect_clip
-    from .sampling import extract_all_frames
+    from .sampling import extract_all_frames, frame_count
     from .sam2_engine import Sam2ClipEngine, resolve_model
 
-    # 1. detections on sampled frames
     detector = detector or GroundingDinoDetector()
-    detections_by_frame = detect_clip(clip_path, detector, step=step, end=end)
+    total = end if end is not None else frame_count(clip_path)
 
-    # 2. extract all frames for SAM2 (frame_idx aligns with global index)
-    extract_all_frames(clip_path, frames_dir, end=end)
+    # detect once over all sampled frames (GDINO has no cross-frame memory)
+    detections_by_frame = detect_clip(clip_path, detector, step=step, end=total)
 
-    # 3. SAM2 engine + track
     checkpoint, config = resolve_model(sam_model)
-    engine = Sam2ClipEngine(frames_dir, checkpoint=checkpoint, config=config,
-                            offload_to_cpu=offload)
-    return track_clip(detections_by_frame, engine, camera=camera, clip=clip,
-                      **track_kwargs)
+    engine = Sam2ClipEngine(checkpoint=checkpoint, config=config, offload_to_cpu=offload)
+
+    def extract_window(ws: int, we: int) -> str:
+        win_dir = os.path.join(frames_dir, f"win_{ws:06d}")
+        if os.path.isdir(win_dir):
+            shutil.rmtree(win_dir)
+        extract_all_frames(clip_path, win_dir, start=ws, end=we)
+        return win_dir
+
+    return track_clip(detections_by_frame, engine, extract_window,
+                      camera=camera, clip=clip, total=total,
+                      window=window, overlap=overlap, **track_kwargs)

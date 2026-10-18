@@ -45,12 +45,14 @@ def sample_frames(clip_path: str, step: int = 10, start: int = 0,
         cap.release()
 
 
-def extract_all_frames(clip_path: str, out_dir: str, end: Optional[int] = None) -> int:
-    """Write every frame of the clip to out_dir as 00000.jpg, 00001.jpg, ...
+def extract_all_frames(clip_path: str, out_dir: str, start: int = 0,
+                       end: Optional[int] = None) -> int:
+    """Write frames [start, end) to out_dir, named 0-based: 00000.jpg = frame `start`.
 
     SAM2's video predictor reads a folder of JPEGs and refers to frames by their
-    0-based position. By extracting from frame 0 with zero-padded index names,
-    SAM2's frame_idx == our global clip frame index -- so seed frames line up.
+    0-based position. Naming them (idx - start) means SAM2 local index i == global
+    frame (start + i), so the windowed driver can map results back to global
+    frames. With the default start=0, names == global frame index.
     Returns the number of frames written.
     """
     os.makedirs(out_dir, exist_ok=True)
@@ -61,13 +63,30 @@ def extract_all_frames(clip_path: str, out_dir: str, end: Optional[int] = None) 
     end = total if end is None else min(end, total)
 
     idx = 0
+    written = 0
     try:
         while idx < end:
+            if idx < start:                      # skip-decode up to the window start
+                if not cap.grab():
+                    break
+                idx += 1
+                continue
             ok, frame = cap.read()
             if not ok:
                 break
-            cv2.imwrite(os.path.join(out_dir, f"{idx:05d}.jpg"), frame)
+            cv2.imwrite(os.path.join(out_dir, f"{idx - start:05d}.jpg"), frame)
+            written += 1
             idx += 1
     finally:
         cap.release()
-    return idx
+    return written
+
+
+def frame_count(clip_path: str) -> int:
+    """Total frames in the clip."""
+    cap = cv2.VideoCapture(clip_path)
+    if not cap.isOpened():
+        raise FileNotFoundError(f"cannot open clip: {clip_path}")
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return n

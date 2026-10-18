@@ -52,9 +52,15 @@ def mask_to_box(mask) -> Optional[tuple]:
 
 
 class Sam2ClipEngine:
-    """SAM2 video predictor over one clip's extracted frames (EC2-only)."""
+    """SAM2 video predictor, built once and reused across windows (EC2-only).
 
-    def __init__(self, frames_dir: str,
+    The model is loaded in __init__; `track_window` runs one window end-to-end
+    (init_state -> seed -> propagate) with a FRESH state each call, so memory is
+    bounded by the window length -- not the whole clip -- and is freed between
+    windows. Frame indices in/out of `track_window` are LOCAL to the window.
+    """
+
+    def __init__(self,
                  checkpoint: Optional[str] = None,
                  config: Optional[str] = None,
                  device: Optional[str] = None,
@@ -67,42 +73,48 @@ class Sam2ClipEngine:
         self.torch = torch
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.predictor = build_sam2_video_predictor(config, checkpoint, device=self.device)
-        # offload_*_to_cpu keeps long clips within T4 memory.
-        self.state = self.predictor.init_state(
-            video_path=frames_dir,
-            offload_video_to_cpu=offload_to_cpu,
-            offload_state_to_cpu=offload_to_cpu,
-        )
-        self._next_obj_id = 0
+        self.offload = offload_to_cpu
 
     def _autocast(self):
         if self.device == "cuda":
             return self.torch.autocast("cuda", dtype=self.torch.bfloat16)
         return self.torch.autocast("cpu", enabled=False)
 
-    def seed(self, frame_idx: int, box) -> int:
-        """Add a new object from a box at `frame_idx`. Returns its obj_id."""
-        obj_id = self._next_obj_id
-        self._next_obj_id += 1
-        with self.torch.inference_mode(), self._autocast():
-            self.predictor.add_new_points_or_box(
-                inference_state=self.state,
-                frame_idx=int(frame_idx),
-                obj_id=obj_id,
-                box=np.asarray(box, dtype=np.float32),
-            )
-        return obj_id
+    def track_window(self, frames_dir: str, seeds) -> dict[int, dict[int, tuple]]:
+        """Track one window of frames.
 
-    def propagate(self) -> dict[int, dict[int, tuple]]:
-        """One forward pass. Returns {obj_id: {frame_idx: box}} for all seeds."""
+        seeds: list of (local_frame_idx, box). Returns {obj_id: {local_frame: box}}.
+        A fresh inference state is created and freed here, so repeated calls don't
+        accumulate memory across windows.
+        """
+        t = self.torch
         out: dict[int, dict[int, tuple]] = defaultdict(dict)
-        with self.torch.inference_mode(), self._autocast():
-            for f_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(self.state):
+        if not seeds:
+            return dict(out)
+
+        with t.inference_mode(), self._autocast():
+            state = self.predictor.init_state(
+                video_path=frames_dir,
+                offload_video_to_cpu=self.offload,
+                offload_state_to_cpu=self.offload,
+            )
+            for obj_id, (frame_idx, box) in enumerate(seeds):
+                self.predictor.add_new_points_or_box(
+                    inference_state=state,
+                    frame_idx=int(frame_idx),
+                    obj_id=obj_id,
+                    box=np.asarray(box, dtype=np.float32),
+                )
+            for f_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(state):
                 for k, oid in enumerate(obj_ids):
                     mask = (mask_logits[k] > 0.0).cpu().numpy()
                     box = mask_to_box(mask)
                     if box is not None:
                         out[int(oid)][int(f_idx)] = box
+
+        del state                                    # free this window's state
+        if self.device == "cuda":
+            t.cuda.empty_cache()
         return dict(out)
 
 
