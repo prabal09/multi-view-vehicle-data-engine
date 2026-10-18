@@ -52,15 +52,18 @@ def track_clip(detections_by_frame, engine, *, camera: str, clip: str,
 
 def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
              step: int = 10, end: Optional[int] = None,
+             sam_model: str = "large", offload: bool = False,
              detector=None, **track_kwargs) -> list[Track]:
     """Full per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2).
 
-    `end` caps processing to frames [0, end) -- useful for a quick validation on
-    a sub-range before committing to the whole clip.
+    `end` caps processing to frames [0, end) for a quick sub-range validation.
+    `sam_model` picks the SAM2 size ("tiny"/"small"/"base"/"large"); smaller is
+    far lighter and faster. `offload` moves SAM2 state to CPU RAM (only for very
+    long clips -- it is slow and can OOM system RAM, so default off).
     """
     from .detect_clip import GroundingDinoDetector, detect_clip
     from .sampling import extract_all_frames
-    from .sam2_engine import Sam2ClipEngine
+    from .sam2_engine import Sam2ClipEngine, resolve_model
 
     # 1. detections on sampled frames
     detector = detector or GroundingDinoDetector()
@@ -70,6 +73,8 @@ def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
     extract_all_frames(clip_path, frames_dir, end=end)
 
     # 3. SAM2 engine + track
-    engine = Sam2ClipEngine(frames_dir)
+    checkpoint, config = resolve_model(sam_model)
+    engine = Sam2ClipEngine(frames_dir, checkpoint=checkpoint, config=config,
+                            offload_to_cpu=offload)
     return track_clip(detections_by_frame, engine, camera=camera, clip=clip,
                       **track_kwargs)

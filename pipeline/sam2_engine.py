@@ -17,13 +17,24 @@ from typing import Optional
 
 import numpy as np
 
-# Checkpoint location: $SAM2_CHECKPOINT if set, else the ~/checkpoints path we
-# baked into the AMI, else fall back to the bare filename (Colab/sanity cwd).
-SAM_CHECKPOINT = os.environ.get(
-    "SAM2_CHECKPOINT",
-    os.path.expanduser("~/checkpoints/sam2.1_hiera_large.pt"),
-)
-SAM_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+# Where the .pt checkpoints live (override with $SAM2_CHECKPOINT_DIR).
+CHECKPOINT_DIR = os.environ.get("SAM2_CHECKPOINT_DIR",
+                                os.path.expanduser("~/checkpoints"))
+
+# model name -> (checkpoint filename, packaged hydra config path). Smaller models
+# use far less memory and run much faster -- prefer "tiny"/"small" for tracking.
+SAM2_MODELS = {
+    "tiny":  ("sam2.1_hiera_tiny.pt",      "configs/sam2.1/sam2.1_hiera_t.yaml"),
+    "small": ("sam2.1_hiera_small.pt",     "configs/sam2.1/sam2.1_hiera_s.yaml"),
+    "base":  ("sam2.1_hiera_base_plus.pt", "configs/sam2.1/sam2.1_hiera_b+.yaml"),
+    "large": ("sam2.1_hiera_large.pt",     "configs/sam2.1/sam2.1_hiera_l.yaml"),
+}
+
+
+def resolve_model(name: str) -> tuple[str, str]:
+    """model name -> (checkpoint_path, config path)."""
+    fname, cfg = SAM2_MODELS[name]
+    return os.path.join(CHECKPOINT_DIR, fname), cfg
 
 
 def mask_to_box(mask) -> Optional[tuple]:
@@ -44,13 +55,15 @@ class Sam2ClipEngine:
     """SAM2 video predictor over one clip's extracted frames (EC2-only)."""
 
     def __init__(self, frames_dir: str,
-                 checkpoint: str = SAM_CHECKPOINT,
-                 config: str = SAM_CONFIG,
+                 checkpoint: Optional[str] = None,
+                 config: Optional[str] = None,
                  device: Optional[str] = None,
-                 offload_to_cpu: bool = True):
+                 offload_to_cpu: bool = False):
         import torch
         from sam2.build_sam import build_sam2_video_predictor
 
+        if checkpoint is None or config is None:
+            checkpoint, config = resolve_model("large")
         self.torch = torch
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.predictor = build_sam2_video_predictor(config, checkpoint, device=self.device)
