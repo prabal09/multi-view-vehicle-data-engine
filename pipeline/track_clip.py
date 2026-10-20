@@ -22,25 +22,25 @@ from typing import Callable, Optional
 from .tracking import Track, merge_tracks, plan_seeds
 
 
-def make_windows(total: int, window: int, overlap: int) -> list[tuple[int, int]]:
-    """Split [0, total) into overlapping [start, end) windows."""
+def make_windows(start: int, end: int, window: int, overlap: int) -> list[tuple[int, int]]:
+    """Split [start, end) into overlapping [ws, we) windows."""
     stride = max(1, window - overlap)
     windows = []
-    ws = 0
-    while ws < total:
-        windows.append((ws, min(ws + window, total)))
-        if ws + window >= total:
+    ws = start
+    while ws < end:
+        windows.append((ws, min(ws + window, end)))
+        if ws + window >= end:
             break
         ws += stride
     return windows
 
 
 def track_clip(detections_by_frame, engine, extract_window: Callable[[int, int], str],
-               *, camera: str, clip: str, total: int,
+               *, camera: str, clip: str, end: int, start: int = 0,
                window: int = 120, overlap: int = 20,
                link_iou: float = 0.3, max_gap_frames: int = 30,
                merge_iou: float = 0.5, min_shared_frames: int = 3) -> list[Track]:
-    """Windowed tracking over one clip.
+    """Windowed tracking over frames [start, end) of one clip.
 
     detections_by_frame: {global_frame: [Detection]}  (from detect_clip)
     engine:        has track_window(frames_dir, seeds)->{obj_id:{local_frame:box}}
@@ -49,7 +49,7 @@ def track_clip(detections_by_frame, engine, extract_window: Callable[[int, int],
     all_raw: dict[int, dict[int, tuple]] = {}
     gid = 0
 
-    for ws, we in make_windows(total, window, overlap):
+    for ws, we in make_windows(start, end, window, overlap):
         det_win = {f: d for f, d in detections_by_frame.items() if ws <= f < we}
         if not det_win:
             continue
@@ -75,24 +75,26 @@ def track_clip(detections_by_frame, engine, extract_window: Callable[[int, int],
 
 
 def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
-             step: int = 10, end: Optional[int] = None,
+             step: int = 10, start: int = 0, end: Optional[int] = None,
              window: int = 120, overlap: int = 20,
              sam_model: str = "large", offload: bool = False,
+             appearance: bool = True,
              detector=None, **track_kwargs) -> list[Track]:
     """Full windowed per-clip pipeline on the GPU box (lazy-builds GDINO + SAM2).
 
-    `end` caps to frames [0, end). `window`/`overlap` bound SAM2 memory per window.
+    Processes frames [start, end). `window`/`overlap` bound SAM2 memory per window.
     `sam_model` picks the SAM2 size; `offload` moves state to CPU RAM (slow).
+    `appearance` adds a CLIP embedding per track (for cross-view association).
     """
     from .detect_clip import GroundingDinoDetector, detect_clip
     from .sampling import extract_all_frames, frame_count
     from .sam2_engine import Sam2ClipEngine, resolve_model
 
     detector = detector or GroundingDinoDetector()
-    total = end if end is not None else frame_count(clip_path)
+    end = end if end is not None else frame_count(clip_path)
 
-    # detect once over all sampled frames (GDINO has no cross-frame memory)
-    detections_by_frame = detect_clip(clip_path, detector, step=step, end=total)
+    # detect once over the sampled frames in [start, end)
+    detections_by_frame = detect_clip(clip_path, detector, step=step, start=start, end=end)
 
     checkpoint, config = resolve_model(sam_model)
     engine = Sam2ClipEngine(checkpoint=checkpoint, config=config, offload_to_cpu=offload)
@@ -104,6 +106,12 @@ def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
         extract_all_frames(clip_path, win_dir, start=ws, end=we)
         return win_dir
 
-    return track_clip(detections_by_frame, engine, extract_window,
-                      camera=camera, clip=clip, total=total,
-                      window=window, overlap=overlap, **track_kwargs)
+    tracks = track_clip(detections_by_frame, engine, extract_window,
+                        camera=camera, clip=clip, start=start, end=end,
+                        window=window, overlap=overlap, **track_kwargs)
+
+    if appearance and tracks:
+        from .appearance import AppearanceEmbedder, embed_tracks
+        embed_tracks(clip_path, tracks, AppearanceEmbedder())
+
+    return tracks

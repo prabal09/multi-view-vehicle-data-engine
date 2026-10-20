@@ -12,6 +12,7 @@ locally. SAM2 itself (the mask propagation) lives in the EC2-only engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
@@ -25,6 +26,8 @@ class Track:
     seed_frame: int
     # frame_index -> box (x0,y0,x1,y1); masks are attached by the SAM2 engine.
     boxes: dict = field(default_factory=dict)
+    # L2-normalized CLIP appearance embedding (set in Step 5 prep), or None.
+    embedding: Optional[list] = None
 
     @property
     def frame_start(self) -> int:
