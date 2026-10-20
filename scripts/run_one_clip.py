@@ -24,8 +24,10 @@ def main():
     ap.add_argument("--frames-dir", default="sam2_frames",
                     help="scratch dir for extracted frames (root disk, not /tmp)")
     ap.add_argument("--step", type=int, default=10)
+    ap.add_argument("--start", type=int, default=0,
+                    help="first frame to process (for mid-clip windows)")
     ap.add_argument("--end", type=int, default=None,
-                    help="cap processing to frames [0, end) for a quick validation")
+                    help="process frames [start, end); default to clip end")
     ap.add_argument("--sam-model", default="large",
                     choices=["tiny", "small", "base", "large"],
                     help="SAM2 size; smaller is lighter/faster")
@@ -35,13 +37,17 @@ def main():
                     help="window overlap in frames (lets boundary tracks stitch)")
     ap.add_argument("--offload", action="store_true",
                     help="offload SAM2 state to CPU RAM (slow; rarely needed with windowing)")
+    ap.add_argument("--no-appearance", dest="appearance", action="store_false",
+                    help="skip the CLIP appearance embedding per track")
     ap.add_argument("--out", default="tracks.json")
     args = ap.parse_args()
 
     tracks = run_clip(args.clip, camera=args.camera, clip=args.clip_name,
-                      frames_dir=args.frames_dir, step=args.step, end=args.end,
+                      frames_dir=args.frames_dir, step=args.step,
+                      start=args.start, end=args.end,
                       window=args.window, overlap=args.overlap,
-                      sam_model=args.sam_model, offload=args.offload)
+                      sam_model=args.sam_model, offload=args.offload,
+                      appearance=args.appearance)
 
     print(f"\n=== {len(tracks)} tracks ===")
     for t in sorted(tracks, key=lambda t: t.frame_start):
@@ -51,7 +57,8 @@ def main():
     data = [{"track_id": t.track_id, "camera": t.camera, "clip": t.clip,
              "seed_frame": t.seed_frame,
              "frame_start": t.frame_start, "frame_end": t.frame_end,
-             "boxes": {str(f): list(b) for f, b in t.boxes.items()}}
+             "boxes": {str(f): list(b) for f, b in t.boxes.items()},
+             "embedding": t.embedding}
             for t in tracks]
     with open(args.out, "w") as fh:
         json.dump(data, fh)
