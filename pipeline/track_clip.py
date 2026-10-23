@@ -111,7 +111,12 @@ def run_clip(clip_path: str, *, camera: str, clip: str, frames_dir: str,
                         window=window, overlap=overlap, **track_kwargs)
 
     if appearance and tracks:
-        from .appearance import AppearanceEmbedder, embed_tracks
-        embed_tracks(clip_path, tracks, AppearanceEmbedder())
+        # Non-fatal: never lose the tracking work if embedding hiccups.
+        try:
+            from .appearance import AppearanceEmbedder, embed_tracks
+            embed_tracks(clip_path, tracks, AppearanceEmbedder())
+        except Exception as e:
+            print(f"WARNING: appearance embedding failed ({e}); "
+                  f"continuing without embeddings")
 
     return tracks

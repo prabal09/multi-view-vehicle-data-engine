@@ -11,7 +11,6 @@ Reuses CLIP -- the same model family as the Step 5b type classifier.
 from __future__ import annotations
 
 import cv2
-import numpy as np
 from PIL import Image
 
 CLIP_MODEL = "openai/clip-vit-large-patch14"
@@ -32,9 +31,22 @@ class AppearanceEmbedder:
     def embed(self, pil_image: Image.Image) -> list[float]:
         inputs = self.processor(images=pil_image, return_tensors="pt").to(self.device)
         with self.torch.no_grad():
-            feat = self.model.get_image_features(**inputs)
+            out = self.model.get_image_features(**inputs)
+        feat = self._to_tensor(out)
         feat = feat / feat.norm(dim=-1, keepdim=True)   # L2-normalize -> cosine
         return feat[0].cpu().tolist()
+
+    @staticmethod
+    def _to_tensor(out):
+        """get_image_features returns a Tensor on some transformers versions and
+        a ModelOutput on others -- pull the image embedding out either way."""
+        if hasattr(out, "image_embeds") and out.image_embeds is not None:
+            return out.image_embeds
+        if hasattr(out, "pooler_output") and out.pooler_output is not None:
+            return out.pooler_output
+        if hasattr(out, "last_hidden_state"):
+            return out.last_hidden_state[:, 0]   # CLS token
+        return out                               # already a tensor
 
 
 def _area(b) -> float:
