@@ -1,0 +1,22 @@
+# Local PostgreSQL for development -- mirrors an AWS RDS for PostgreSQL instance.
+# Start:  docker compose up -d      Stop: docker compose down
+# Data persists in the pgdata volume between restarts.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vehicle
+      POSTGRES_PASSWORD: vehicle
+      POSTGRES_DB: vehicles
+    ports:
+      - "5432:5432"            # host:container -> connect at localhost:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vehicle -d vehicles"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
