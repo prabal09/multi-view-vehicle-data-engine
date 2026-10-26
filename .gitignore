@@ -3,9 +3,16 @@
 *.key
 *.csv
 
+# Secrets / local config -- never commit (holds DB creds, e.g. RDS password)
+.env
+
 # Python
 __pycache__/
 *.pyc
+
+# Personal re-understanding aids (study notes, not project docs)
+docs/REVISION.md
+docs/REVISION-ANSWERS.md
 
 # Local sanity-test outputs (large, regenerable)
 sanity/track/
