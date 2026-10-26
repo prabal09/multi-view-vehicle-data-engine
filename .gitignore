@@ -6,6 +6,9 @@
 # Secrets / local config -- never commit (holds DB creds, e.g. RDS password)
 .env
 
+# Old prototype kept locally for reference, not part of the repo
+archive/
+
 # Python
 __pycache__/
 *.pyc
