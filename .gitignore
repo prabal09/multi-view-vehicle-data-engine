@@ -16,6 +16,13 @@ __pycache__/
 # Personal re-understanding aids (study notes, not project docs)
 docs/REVISION.md
 docs/REVISION-ANSWERS.md
+docs/step2-grounding-dino.md
+docs/step3-sam2.md
+docs/step4-bev.md  
+docs/step5-association.md  
+docs/step6-type-labeling.md  
+docs/step7-database-etl.md  
+docs/step8-query-deployment.md
 
 # Local sanity-test outputs (large, regenerable)
 sanity/track/

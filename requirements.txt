@@ -1,0 +1,6 @@
+# CPU-only deps for the decoupled query side (ETL + association + DB).
+# No torch here -- the GPU models run on EC2; this half is laptop-friendly.
+numpy>=1.24
+opencv-python-headless>=4.8
+psycopg[binary]>=3.1
+python-dotenv>=1.0
